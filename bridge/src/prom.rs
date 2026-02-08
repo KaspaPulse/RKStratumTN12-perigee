@@ -1358,7 +1358,6 @@ async fn get_config_json() -> String {
 
             return serde_json::to_string(&json_value).unwrap_or_else(|_| "{}".to_string());
         }
-    }
     "{}".to_string()
 }
 
