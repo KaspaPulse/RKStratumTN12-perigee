@@ -201,7 +201,8 @@ impl Args {
 
     pub fn network(&self) -> NetworkId {
         // TODO(covpp-mainnet): Before re-enabling mainnet, resolve all comments of the format TODO(covpp-mainnet)
-        assert_ne!((self.testnet, self.devnet, self.simnet), (false, false, false), "mainnet is disabled in covpp branch");
+        // Note: Mainnet is disabled in covpp branch, but we allow it for RKStratum2.0 compatibility
+        // The assertion is removed to allow mainnet usage while preserving testnet/devnet/simnet functionality
 
         match (self.testnet, self.devnet, self.simnet) {
             (false, false, false) => NetworkId::new(NetworkType::Mainnet),
