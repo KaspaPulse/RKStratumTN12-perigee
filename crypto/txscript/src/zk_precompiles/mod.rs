@@ -1,14 +1,18 @@
 mod error;
 mod fields;
 pub mod groth16;
+#[cfg(not(windows))]
 pub mod risc0;
 pub mod tags;
 pub mod tests;
 use crate::{
     data_stack::Stack,
-    zk_precompiles::{error::ZkIntegrityError, groth16::Groth16Precompile, risc0::R0SuccinctPrecompile, tags::ZkTag},
+    zk_precompiles::{error::ZkIntegrityError, groth16::Groth16Precompile, tags::ZkTag},
 };
 use kaspa_txscript_errors::TxScriptError;
+
+#[cfg(not(windows))]
+use crate::zk_precompiles::risc0::R0SuccinctPrecompile;
 
 trait ZkPrecompile {
     type Error: Into<ZkIntegrityError> + std::fmt::Display;
@@ -32,7 +36,10 @@ pub(crate) fn verify_zk(tag: ZkTag, dstack: &mut Stack) -> Result<(), TxScriptEr
     // Match the tag and verify the proof accordingly
     match tag {
         ZkTag::Groth16 => Groth16Precompile::verify_zk(dstack).map_err(|e| TxScriptError::ZkIntegrity(e.to_string())),
+        #[cfg(not(windows))]
         ZkTag::R0Succinct => R0SuccinctPrecompile::verify_zk(dstack).map_err(|e| TxScriptError::ZkIntegrity(e.to_string())),
+        #[cfg(windows)]
+        ZkTag::R0Succinct => Err(TxScriptError::ZkIntegrity("R0Succinct ZK precompile is not supported on Windows builds".to_string())),
     }
 }
 

@@ -48,13 +48,15 @@ smallvec.workspace = true
 thiserror.workspace = true
 wasm-bindgen.workspace = true
 workflow-wasm.workspace = true
+bytemuck.workspace = true
+once_cell.workspace = true
+
+[target.'cfg(not(windows))'.dependencies]
 risc0-groth16.workspace = true
 risc0-circuit-recursion.workspace = true
 risc0-zkp.workspace = true
 risc0-core.workspace = true
 risc0-binfmt.workspace = true
-bytemuck.workspace = true
-once_cell.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
