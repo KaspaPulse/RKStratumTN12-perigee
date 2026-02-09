@@ -1,6 +1,7 @@
 use crate::kaspaapi::KaspaApi;
 use crate::prom;
 use kaspa_consensus_core::block::Block;
+use kaspa_rpc_core::RpcRawBlock;
 use parking_lot::{Condvar, Mutex};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -36,7 +37,8 @@ pub struct InternalCpuMinerConfig {
 
 struct Work {
     id: u64,
-    block: Block,
+    block: Block,           // Used for PoW validation
+    rpc_block: RpcRawBlock, // Preserved original RPC block with covenant data
     pow_state: Arc<kaspa_pow::State>,
 }
 
@@ -70,7 +72,15 @@ impl SharedWork {
         if shutdown_flag.load(Ordering::Acquire) && slot.version == last_seen {
             return (last_seen, None);
         }
-        (slot.version, slot.work.as_ref().map(|w| Work { id: w.id, block: w.block.clone(), pow_state: Arc::clone(&w.pow_state) }))
+        (
+            slot.version,
+            slot.work.as_ref().map(|w| Work {
+                id: w.id,
+                block: w.block.clone(),
+                rpc_block: w.rpc_block.clone(),
+                pow_state: Arc::clone(&w.pow_state),
+            }),
+        )
     }
 
     fn notify_all(&self) {
@@ -106,24 +116,37 @@ pub fn spawn_internal_cpu_miner(
     let metrics = Arc::new(InternalMinerMetrics::default());
     let metrics_submit = Arc::clone(&metrics);
 
-    let (submit_tx, mut submit_rx) = mpsc::unbounded_channel::<Block>();
+    let (submit_tx, mut submit_rx) = mpsc::unbounded_channel::<RpcRawBlock>();
     let kaspa_api_submit = Arc::clone(&kaspa_api);
     let shutdown_flag_submit = Arc::clone(&shutdown_flag);
     tokio::spawn(async move {
-        while let Some(block) = submit_rx.recv().await {
+        while let Some(rpc_block) = submit_rx.recv().await {
             if shutdown_flag_submit.load(Ordering::Acquire) {
                 break;
             }
             metrics_submit.blocks_submitted.fetch_add(1, Ordering::Relaxed);
 
-            // Capture details for dashboard before moving the block into submit_block.
+            // Capture details for dashboard - convert header to get hash/nonce/bluescore
             let (hash_str, nonce, bluescore) = {
+                // Convert RPC header to consensus header to get hash
                 use kaspa_consensus_core::hashing::header;
-                let hash = header::hash(&block.header).to_string();
-                (hash, block.header.nonce, block.header.blue_score)
+                match Block::try_from(rpc_block.clone()) {
+                    Ok(block) => {
+                        let hash = header::hash(&block.header).to_string();
+                        (hash, block.header.nonce, block.header.blue_score)
+                    }
+                    Err(_) => {
+                        // Fallback: use header fields directly if conversion fails
+                        let nonce_val = rpc_block.header.nonce;
+                        let bluescore_val = rpc_block.header.blue_score;
+                        // Hash calculation would require full conversion, use placeholder
+                        (format!("{:x}", nonce_val), nonce_val, bluescore_val)
+                    }
+                }
             };
 
-            let res = kaspa_api_submit.submit_block(block).await;
+            // Submit the RPC block directly (preserves covenant data)
+            let res = kaspa_api_submit.submit_rpc_block(rpc_block).await;
             match res {
                 Ok(response) => {
                     if response.report.is_success() {
@@ -184,12 +207,12 @@ pub fn spawn_internal_cpu_miner(
                 break;
             }
 
-            match kaspa_api_templates.get_block_template(&mining_address, "internal", "").await {
-                Ok(block) => {
+            match kaspa_api_templates.get_block_template_rpc(&mining_address, "internal", "").await {
+                Ok((block, rpc_block)) => {
                     let id = next_id_templates.fetch_add(1, Ordering::Relaxed);
                     let header = block.header.clone();
                     let pow_state = Arc::new(kaspa_pow::State::new(&header));
-                    work_publisher.publish(Work { id, block, pow_state });
+                    work_publisher.publish(Work { id, block, rpc_block, pow_state });
                 }
                 Err(e) => {
                     tracing::warn!("[InternalMiner] get_block_template failed: {e}");
@@ -233,11 +256,14 @@ pub fn spawn_internal_cpu_miner(
                     metrics_threads.hashes_tried.fetch_add(1, Ordering::Relaxed);
                     let (passed, _) = w.pow_state.check_pow(nonce);
                     if passed {
-                        let mut header = (*w.block.header).clone();
-                        header.nonce = nonce;
-                        let txs = w.block.transactions.iter().cloned().collect();
-                        let mined_block = Block::from_arcs(Arc::new(header), Arc::new(txs));
-                        let _ = submit_tx.send(mined_block);
+                        // Reconstruct RPC block with updated nonce but preserve original transactions (with covenant data)
+                        let mut rpc_header = w.rpc_block.header.clone();
+                        rpc_header.nonce = nonce;
+                        let mined_rpc_block = RpcRawBlock {
+                            header: rpc_header,
+                            transactions: w.rpc_block.transactions.clone(), // Preserve original transactions with covenant data
+                        };
+                        let _ = submit_tx.send(mined_rpc_block);
                         found_counter.fetch_add(1, Ordering::Relaxed);
                         break;
                     }

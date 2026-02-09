@@ -735,6 +735,107 @@ impl KaspaApi {
         Err(anyhow::anyhow!("Failed to get valid block template after {} attempts: {:?}", max_retries, last_error))
     }
 
+    /// Get block template for internal CPU miner (returns both Block and RpcRawBlock to preserve covenant data)
+    pub async fn get_block_template_rpc(
+        &self,
+        wallet_addr: &str,
+        _remote_app: &str,
+        _canxium_addr: &str,
+    ) -> Result<(Block, RpcRawBlock)> {
+        // Retry up to 3 times if we get "Odd number of digits" error
+        let max_retries = 3;
+        let mut last_error = None;
+
+        for attempt in 0..max_retries {
+            // Parse wallet address each time
+            let address =
+                Address::try_from(wallet_addr).map_err(|e| anyhow::anyhow!("Could not decode address {}: {}", wallet_addr, e))?;
+
+            // Request block template using RPC client wrapper
+            let response = match self
+                .client
+                .get_block_template_call(None, GetBlockTemplateRequest::new(address, self.coinbase_tag.clone()))
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt < max_retries - 1 {
+                        warn!("Failed to get block template (attempt {}/{}): {}, retrying...", attempt + 1, max_retries, e);
+                        sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                        continue;
+                    }
+                    return Err(anyhow::anyhow!("Failed to get block template after {} attempts: {}", max_retries, e));
+                }
+            };
+
+            // Get RPC block from response (preserve original with covenant data)
+            let rpc_block = response.block.clone();
+
+            // Convert RpcRawBlock to Block for PoW validation
+            match Block::try_from(rpc_block.clone()) {
+                Ok(block) => {
+                    // Validate that we can serialize the block header
+                    let serialize_result = crate::hasher::serialize_block_header(&block).map_err(|e| e.to_string());
+
+                    match serialize_result {
+                        Ok(_) => {
+                            // Return both Block (for PoW) and RpcRawBlock (for submission with covenant data)
+                            return Ok((block, rpc_block));
+                        }
+                        Err(error_str) => {
+                            if error_str.contains("Odd number of digits") {
+                                last_error = Some(format!("Block has malformed hash field: {}", error_str));
+                                if attempt < max_retries - 1 {
+                                    warn!(
+                                        "Block template has malformed hash field (attempt {}/{}), retrying...",
+                                        attempt + 1,
+                                        max_retries
+                                    );
+                                    sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                                    continue;
+                                }
+                            }
+                            return Err(anyhow::anyhow!("Failed to serialize block header: {}", error_str));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error_str = format!("{:?}", e);
+                    last_error = Some(error_str.clone());
+                    if error_str.contains("Odd number of digits") && attempt < max_retries - 1 {
+                        warn!(
+                            "Block conversion failed with 'Odd number of digits' error (attempt {}/{}), retrying...",
+                            attempt + 1,
+                            max_retries
+                        );
+                        sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                        continue;
+                    }
+                    if error_str.contains("Odd number of digits") {
+                        return Err(anyhow::anyhow!(
+                            "Failed to convert RPC block to Block after {} attempts: {} - This usually indicates a malformed hash field in the block template from the Kaspa node.",
+                            max_retries,
+                            error_str
+                        ));
+                    } else {
+                        return Err(anyhow::anyhow!("Failed to convert RPC block to Block: {}", error_str));
+                    }
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("Failed to get valid block template after {} attempts: {:?}", max_retries, last_error))
+    }
+
+    /// Submit RPC block directly (preserves covenant data)
+    pub async fn submit_rpc_block(&self, rpc_block: RpcRawBlock) -> Result<SubmitBlockResponse> {
+        // Submit block (don't allow non-DAA blocks)
+        let result =
+            self.client.submit_block_call(None, SubmitBlockRequest::new(rpc_block, false)).await.context("Failed to submit block")?;
+
+        Ok(result)
+    }
+
     /// Get balances by addresses (for Prometheus metrics)
     pub async fn get_balances_by_addresses(&self, addresses: &[String]) -> Result<Vec<(String, u64)>> {
         let parsed_addresses: Result<Vec<Address>, _> = addresses.iter().map(|addr| Address::try_from(addr.as_str())).collect();
