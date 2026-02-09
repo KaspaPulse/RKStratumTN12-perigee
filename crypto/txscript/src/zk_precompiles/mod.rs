@@ -39,7 +39,9 @@ pub(crate) fn verify_zk(tag: ZkTag, dstack: &mut Stack) -> Result<(), TxScriptEr
         #[cfg(not(windows))]
         ZkTag::R0Succinct => R0SuccinctPrecompile::verify_zk(dstack).map_err(|e| TxScriptError::ZkIntegrity(e.to_string())),
         #[cfg(windows)]
-        ZkTag::R0Succinct => Err(TxScriptError::ZkIntegrity("R0Succinct ZK precompile is not supported on Windows builds".to_string())),
+        ZkTag::R0Succinct => {
+            Err(TxScriptError::ZkIntegrity("R0Succinct ZK precompile is not supported on Windows builds".to_string()))
+        }
     }
 }
 
