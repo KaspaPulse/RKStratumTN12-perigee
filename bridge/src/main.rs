@@ -313,7 +313,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
             let threads = cli.internal_cpu_miner_threads.unwrap_or(1);
             let throttle = cli.internal_cpu_miner_throttle_ms.map(Duration::from_millis);
-            let template_poll_interval = Duration::from_millis(cli.internal_cpu_miner_template_poll_ms.unwrap_or(250));
+            // Reduced default template poll interval from 250ms to 50ms for faster work updates
+            // This is critical for high BPS networks like TN12 (10 BPS = 100ms per block)
+            let template_poll_interval = Duration::from_millis(cli.internal_cpu_miner_template_poll_ms.unwrap_or(50));
 
             let cfg = kaspa_stratum_bridge::InternalCpuMinerConfig {
                 enabled: true,

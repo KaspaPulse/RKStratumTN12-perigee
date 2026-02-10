@@ -30,7 +30,7 @@ const VAR_DIFF_THREAD_SLEEP: u64 = 10;
 #[allow(dead_code)]
 const WORK_WINDOW: u64 = 80;
 const STATS_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
-const STATS_PRINT_INTERVAL: Duration = Duration::from_secs(10);
+const STATS_PRINT_INTERVAL: Duration = Duration::from_secs(60);
 const BLOCK_CONFIRM_RETRY_DELAY: Duration = Duration::from_secs(2);
 const BLOCK_CONFIRM_MAX_ATTEMPTS: usize = 30;
 
