@@ -118,8 +118,16 @@ pub static RKSTRATUM_CPU_MINER_METRICS: Lazy<parking_lot::Mutex<Option<Arc<Inter
     Lazy::new(|| parking_lot::Mutex::new(None));
 
 #[cfg(feature = "rkstratum_cpu_miner")]
+static INTERNAL_CPU_BLOCKS_ALL_TIME: Lazy<std::sync::atomic::AtomicU64> = Lazy::new(|| std::sync::atomic::AtomicU64::new(0));
+
+#[cfg(feature = "rkstratum_cpu_miner")]
 pub fn set_rkstratum_cpu_miner_metrics(metrics: Arc<InternalMinerMetrics>) {
     *RKSTRATUM_CPU_MINER_METRICS.lock() = Some(metrics);
+}
+
+#[cfg(feature = "rkstratum_cpu_miner")]
+pub fn increment_internal_cpu_blocks_all_time() {
+    INTERNAL_CPU_BLOCKS_ALL_TIME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[derive(Clone)]
@@ -1493,6 +1501,10 @@ impl ShareHandler {
                             // Update tracking variables for next iteration
                             last_internal_hashes = Some(hashes);
                             last_internal_sample = now;
+
+                            // Get all-time total blocks (persists across restarts within this process)
+                            let all_time_blocks = INTERNAL_CPU_BLOCKS_ALL_TIME.load(std::sync::atomic::Ordering::Relaxed);
+
                             internal_totals =
                                 Some((hashrate_ghs, accepted as i64, submitted.saturating_sub(accepted) as i64, 0, accepted as i64));
                             let internal_line = format!(
@@ -1505,7 +1517,7 @@ impl ShareHandler {
                                 "-",
                                 format!("{}/{}/{}", accepted, submitted.saturating_sub(accepted), 0),
                                 accepted,
-                                accepted, // Total blocks (same as Blocks for InternalCPU)
+                                all_time_blocks as i64, // Total blocks (all-time, persists during process lifetime)
                                 format_uptime(now.duration_since(start))
                             );
                             out.push(internal_line);
@@ -1525,6 +1537,12 @@ impl ShareHandler {
                     total_stales += stl;
                     total_invalids += inv;
                     total_blocks += blocks;
+                    // Add InternalCPU all-time blocks to total_blocks_all_time
+                    #[cfg(feature = "rkstratum_cpu_miner")]
+                    {
+                        let all_time_blocks = INTERNAL_CPU_BLOCKS_ALL_TIME.load(std::sync::atomic::Ordering::Relaxed);
+                        total_blocks_all_time += all_time_blocks as i64;
+                    }
                 }
 
                 let overall_spm = if total_uptime_mins > 0.0 { (total_shares as f64) / total_uptime_mins } else { 0.0 };

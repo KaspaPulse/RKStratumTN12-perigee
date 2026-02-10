@@ -1,4 +1,6 @@
 use crate::kaspaapi::KaspaApi;
+#[cfg(feature = "rkstratum_cpu_miner")]
+use crate::share_handler::increment_internal_cpu_blocks_all_time;
 use kaspa_consensus_core::block::Block;
 use kaspa_rpc_core::RpcRawBlock;
 use parking_lot::{Condvar, Mutex};
@@ -85,7 +87,6 @@ impl SharedWork {
         )
     }
 
-
     fn notify_all(&self) {
         self.cv.notify_all();
     }
@@ -129,7 +130,7 @@ pub fn spawn_internal_cpu_miner(
             }
             // Optimization: Extract header info before submission (no expensive conversion needed)
             let nonce = rpc_block.header.nonce;
-            
+
             // Submit the RPC block directly to node (preserves covenant data)
             // Trust the node's response - if it accepts, count it as accepted immediately
             // No expensive conversions or polling - just submit and trust the node
@@ -141,6 +142,7 @@ pub fn spawn_internal_cpu_miner(
                         // The node's acceptance is authoritative - no need for BLUE confirmation polling
                         metrics_submit.blocks_submitted.fetch_add(1, Ordering::Relaxed);
                         metrics_submit.blocks_accepted.fetch_add(1, Ordering::Relaxed);
+                        increment_internal_cpu_blocks_all_time();
                         tracing::info!("[InternalMiner] block accepted by node (nonce: {})", nonce);
                     } else {
                         tracing::warn!("[InternalMiner] block rejected by node: {:?}", response.report);
@@ -207,7 +209,7 @@ pub fn spawn_internal_cpu_miner(
     // Optimization: Batch hash counting to reduce atomic operations
     // Update metrics every BATCH_SIZE hashes instead of every single hash
     const BATCH_SIZE: u64 = 1000;
-    
+
     // Optimization: Check for work updates less frequently to reduce lock contention
     // Reduced to 250 for faster work updates (critical for high BPS networks like TN12 with 10 BPS)
     // At ~0.28 MH/s per thread, 250 hashes = ~0.9ms, ensuring work updates are detected within ~1ms
@@ -258,7 +260,7 @@ pub fn spawn_internal_cpu_miner(
                     // Increment nonce BEFORE checking to optimize branch prediction
                     let current_nonce = nonce;
                     nonce = nonce.wrapping_add(nonce_step);
-                    
+
                     let (passed, _) = w.pow_state.check_pow(current_nonce);
                     if passed {
                         // Batch update hash count before submitting
@@ -279,7 +281,7 @@ pub fn spawn_internal_cpu_miner(
                         };
                         let _ = submit_tx.send(mined_rpc_block);
                         found_counter.fetch_add(1, Ordering::Relaxed);
-                        
+
                         // Optimization: Quick work check after finding block (minimal lock time)
                         // Only check version number - if changed, we'll get new work in outer loop
                         // Use try_lock for non-blocking check - if lock is busy, skip check and continue mining
